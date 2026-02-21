@@ -214,10 +214,13 @@ export function exportPage1(config: PedalConfig): string {
 
 function replaceValue(line: string, field: string, newValue: string): string {
   // Replace everything after "field = " or "field=" keeping the prefix
+  // Strip \r for matching, then preserve it if it was there
+  const hasCarriageReturn = line.endsWith('\r');
+  const cleanLine = hasCarriageReturn ? line.slice(0, -1) : line;
   const regex = new RegExp(`^(\\s*${field}\\s*=\\s*)(.+)$`);
-  const match = line.match(regex);
+  const match = cleanLine.match(regex);
   if (match) {
-    return match[1] + newValue;
+    return match[1] + newValue + (hasCarriageReturn ? '\r' : '');
   }
   return line;
 }
