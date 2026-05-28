@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { KeyConfig, LedMode } from '@/types/midi';
 import { hexToInput, rgbInputToHex } from '@/utils/parser';
 import { Palette, Copy, ClipboardPaste, Pipette } from 'lucide-react';
@@ -23,6 +23,26 @@ const PRESET_COLORS = [
   { name: 'Branco', color: '0xFFFFFF' },
   { name: 'Desligado', color: '0x000000' },
 ];
+
+type CommandField = 'shortDw' | 'shortUp' | 'longDw' | 'longUp';
+
+function parseBuilderCommand(raw: string): { type: 'CC' | 'PC' | 'NT'; channel: number; param: number; value?: number } | null {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return null;
+
+  const match = trimmed.match(/^\[(\d+)\]\[(CC|PC|NT)\]\[(\d+)\](?:\[(\d+)\])?$/i);
+  if (!match) return null;
+
+  const [, channelRaw, typeRaw, paramRaw, valueRaw] = match;
+  const type = typeRaw.toUpperCase() as 'CC' | 'PC' | 'NT';
+
+  return {
+    type,
+    channel: Number(channelRaw),
+    param: Number(paramRaw),
+    value: valueRaw !== undefined ? Number(valueRaw) : undefined,
+  };
+}
 
 const ButtonEditor: React.FC<ButtonEditorProps> = ({ keyConfig, keyIndex, onUpdate }) => {
   const [activeState, setActiveState] = useState(0);
@@ -242,6 +262,7 @@ const ButtonEditor: React.FC<ButtonEditorProps> = ({ keyConfig, keyIndex, onUpda
           </div>
         ) : (
           <CommandBuilder
+            keyIndex={keyIndex}
             currentState={currentState}
             activeState={activeState}
             onUpdate={(field, value) => updateCommand(activeState, field, value)}
@@ -252,7 +273,7 @@ const ButtonEditor: React.FC<ButtonEditorProps> = ({ keyConfig, keyIndex, onUpda
       {/* Warnings */}
       {missingFields.length > 0 && (
         <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
-          ⚠ Campos ausentes no template: {missingFields.join(', ')}. Não serão exportados.
+          ⚠ Campos ausentes no template: {missingFields.join(', ')}. O app criará estes campos no TXT ao exportar/salvar.
         </div>
       )}
     </div>
@@ -261,15 +282,37 @@ const ButtonEditor: React.FC<ButtonEditorProps> = ({ keyConfig, keyIndex, onUpda
 
 // Builder sub-component
 const CommandBuilder: React.FC<{
+  keyIndex: number;
   currentState: { shortDw: string; shortUp: string; longDw: string; longUp: string };
   activeState: number;
-  onUpdate: (field: 'shortDw' | 'shortUp' | 'longDw' | 'longUp', value: string) => void;
-}> = ({ currentState, activeState, onUpdate }) => {
+  onUpdate: (field: CommandField, value: string) => void;
+}> = ({ keyIndex, currentState, activeState, onUpdate }) => {
   const [type, setType] = useState<'CC' | 'PC' | 'NT'>('CC');
   const [channel, setChannel] = useState(1);
   const [param, setParam] = useState(0);
   const [value, setValue] = useState(127);
-  const [targetField, setTargetField] = useState<'shortDw' | 'shortUp' | 'longDw' | 'longUp'>('shortDw');
+  const [targetField, setTargetField] = useState<CommandField>('shortDw');
+
+  useEffect(() => {
+    const firstFilledField =
+      (['shortDw', 'shortUp', 'longDw', 'longUp'] as const).find((field) => currentState[field]?.trim()) || 'shortDw';
+    setTargetField(firstFilledField);
+  }, [keyIndex, activeState]);
+
+  useEffect(() => {
+    const parsed = parseBuilderCommand(currentState[targetField]);
+    if (!parsed) {
+      return;
+    }
+
+    setType(parsed.type);
+    setChannel(Number.isFinite(parsed.channel) ? parsed.channel : 1);
+    setParam(Number.isFinite(parsed.param) ? parsed.param : 0);
+
+    if (parsed.type !== 'PC') {
+      setValue(Number.isFinite(parsed.value ?? NaN) ? (parsed.value as number) : 127);
+    }
+  }, [currentState, targetField]);
 
   const generate = () => {
     let cmd = '';
@@ -292,7 +335,7 @@ const CommandBuilder: React.FC<{
         </div>
         <div>
           <label className="text-[10px] text-muted-foreground">Destino</label>
-          <select value={targetField} onChange={e => setTargetField(e.target.value as any)} className="w-full rounded border border-border bg-secondary px-2 py-1 text-xs text-secondary-foreground">
+          <select value={targetField} onChange={e => setTargetField(e.target.value as CommandField)} className="w-full rounded border border-border bg-secondary px-2 py-1 text-xs text-secondary-foreground">
             <option value="shortDw">Short Press ↓</option>
             <option value="shortUp">Short Press ↑</option>
             <option value="longDw">Long Press ↓</option>

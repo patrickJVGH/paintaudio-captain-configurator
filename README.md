@@ -71,3 +71,47 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+## Desktop app (Windows)
+
+Build and run the Electron desktop app:
+
+```sh
+.\desktop.cmd
+```
+
+Build a Windows installer (`.exe`) with automatic patch version bump:
+
+```sh
+.\build-installer.cmd
+```
+
+Build installer bumping minor or major version:
+
+```sh
+.\app.cmd installer-minor
+.\app.cmd installer-major
+```
+
+Installer artifacts are generated in:
+
+```sh
+release\
+```
+
+Version backups are kept in:
+
+```sh
+release\history\vX.Y.Z\
+```
+
+## MIDI Captain USB workflow
+
+In desktop mode (Electron), the app can:
+
+- detect removable drives with `pageN.txt` files
+- list available files from the detected MIDI Captain folder
+- open a selected file directly from the device
+- save edited config back to the same folder (with auto backup `.bak-YYYYMMDDHHMMSS`)
+
+If the device is disconnected, USB actions remain disabled.

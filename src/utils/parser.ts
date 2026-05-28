@@ -15,6 +15,16 @@ function extractBracketValue(value: string): string {
   return m ? m[1] : value.trim();
 }
 
+function normalizeCommandValue(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  // We export empty commands as [] so the file keeps the field,
+  // but the UI should treat it as an empty command.
+  if (/^\[\s*\]$/.test(trimmed)) {
+    return '';
+  }
+  return trimmed;
+}
+
 export function parsePage1(text: string): PedalConfig {
   const lines = text.split('\n');
   const originalLines = [...lines];
@@ -79,25 +89,25 @@ export function parsePage1(text: string): PedalConfig {
             while (keyConfig.states.length <= stateNum) {
               keyConfig.states.push(createEmptyState());
             }
-            keyConfig.states[stateNum].shortDw = rawValue.trim();
+            keyConfig.states[stateNum].shortDw = normalizeCommandValue(rawValue);
           } else if (key.startsWith('short_up')) {
             const stateNum = parseInt(key.replace('short_up', '')) - 1;
             while (keyConfig.states.length <= stateNum) {
               keyConfig.states.push(createEmptyState());
             }
-            keyConfig.states[stateNum].shortUp = rawValue.trim();
+            keyConfig.states[stateNum].shortUp = normalizeCommandValue(rawValue);
           } else if (key.match(/^long\d+$/) && !key.startsWith('long_up')) {
             const stateNum = parseInt(key.replace('long', '')) - 1;
             while (keyConfig.states.length <= stateNum) {
               keyConfig.states.push(createEmptyState());
             }
-            keyConfig.states[stateNum].longDw = rawValue.trim();
+            keyConfig.states[stateNum].longDw = normalizeCommandValue(rawValue);
           } else if (key.startsWith('long_up')) {
             const stateNum = parseInt(key.replace('long_up', '')) - 1;
             while (keyConfig.states.length <= stateNum) {
               keyConfig.states.push(createEmptyState());
             }
-            keyConfig.states[stateNum].longUp = rawValue.trim();
+            keyConfig.states[stateNum].longUp = normalizeCommandValue(rawValue);
           }
         }
       }
@@ -161,6 +171,7 @@ export function parseMidiCommand(raw: string): string {
 
 export function exportPage1(config: PedalConfig): string {
   const lines = [...config.originalLines];
+  const lineEndingSuffix = lines.some((line) => line.endsWith('\r')) ? '\r' : '';
 
   for (const mapping of config.lineMap) {
     const { lineIndex, section, field } = mapping;
@@ -191,25 +202,175 @@ export function exportPage1(config: PedalConfig): string {
         } else if (field.startsWith('short_dw')) {
           const stateNum = parseInt(field.replace('short_dw', '')) - 1;
           const state = keyConfig.states[stateNum];
-          if (state && state.shortDw) lines[lineIndex] = replaceValue(originalLine, field, state.shortDw);
+          if (state) lines[lineIndex] = replaceValue(originalLine, field, formatCommandForExport(state.shortDw));
         } else if (field.startsWith('short_up')) {
           const stateNum = parseInt(field.replace('short_up', '')) - 1;
           const state = keyConfig.states[stateNum];
-          if (state && state.shortUp) lines[lineIndex] = replaceValue(originalLine, field, state.shortUp);
+          if (state) lines[lineIndex] = replaceValue(originalLine, field, formatCommandForExport(state.shortUp));
         } else if (field.match(/^long\d+$/) && !field.startsWith('long_up')) {
           const stateNum = parseInt(field.replace('long', '')) - 1;
           const state = keyConfig.states[stateNum];
-          if (state && state.longDw) lines[lineIndex] = replaceValue(originalLine, field, state.longDw);
+          if (state) lines[lineIndex] = replaceValue(originalLine, field, formatCommandForExport(state.longDw));
         } else if (field.startsWith('long_up')) {
           const stateNum = parseInt(field.replace('long_up', '')) - 1;
           const state = keyConfig.states[stateNum];
-          if (state && state.longUp) lines[lineIndex] = replaceValue(originalLine, field, state.longUp);
+          if (state) lines[lineIndex] = replaceValue(originalLine, field, formatCommandForExport(state.longUp));
         }
       }
     }
   }
 
+  insertMissingKeyStateFields(lines, config, lineEndingSuffix);
+
   return lines.join('\n');
+}
+
+export function cleanupPage1Text(text: string): string {
+  const usesCrlf = text.includes('\r\n');
+  const lineBreak = usesCrlf ? '\r\n' : '\n';
+  const lines = text.split(/\r?\n/);
+  const cleaned: string[] = [];
+
+  let currentSection = '';
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const sectionMatch = trimmed.match(/^\[(\w+)\]\s*$/);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1];
+    }
+
+    const isKeySection = /^key\d$/.test(currentSection);
+    const isEmptyCommandPlaceholder =
+      /^\s*(short_dw\d+|short_up\d+|long\d+|long_up\d+)\s*=\s*\[\s*\]\s*$/i.test(trimmed);
+
+    if (isKeySection && isEmptyCommandPlaceholder) {
+      continue;
+    }
+
+    cleaned.push(line);
+  }
+
+  return cleaned.join(lineBreak);
+}
+
+function formatCommandForExport(value: string): string {
+  const trimmed = (value || '').trim();
+  return trimmed || '[]';
+}
+
+function insertMissingKeyStateFields(lines: string[], config: PedalConfig, lineEndingSuffix: string): void {
+  const insertions: Array<{ index: number; lines: string[] }> = [];
+
+  for (let keyIdx = 0; keyIdx < config.keys.length; keyIdx++) {
+    const keyConfig = config.keys[keyIdx];
+    const sectionName = `key${keyIdx}`;
+    const sectionRange = findSectionInsertIndex(config.originalLines, sectionName);
+    if (!sectionRange) {
+      continue;
+    }
+
+    const existingFields = new Set(
+      config.lineMap.filter((mapping) => mapping.section === sectionName).map((mapping) => mapping.field),
+    );
+    const missingLines: string[] = [];
+
+    if (!existingFields.has('keytimes')) {
+      missingLines.push(`keytimes = [${keyConfig.keytimes}]${lineEndingSuffix}`);
+    }
+
+    if (!existingFields.has('ledmode')) {
+      missingLines.push(`ledmode = [${keyConfig.ledmode}]${lineEndingSuffix}`);
+    }
+
+    for (let stateIdx = 0; stateIdx < keyConfig.keytimes; stateIdx++) {
+      const stateNum = stateIdx + 1;
+      const state = keyConfig.states[stateIdx] || createEmptyState();
+      const ledField = `ledcolor${stateNum}`;
+      const shortDwField = `short_dw${stateNum}`;
+      const shortUpField = `short_up${stateNum}`;
+      const longDwField = `long${stateNum}`;
+      const longUpField = `long_up${stateNum}`;
+
+      if (!existingFields.has(ledField)) {
+        missingLines.push(
+          `${ledField} = [${state.ledColor.seg1}][${state.ledColor.seg2}][${state.ledColor.seg3}]${lineEndingSuffix}`,
+        );
+      }
+      if (!existingFields.has(shortDwField) && hasCommandContent(state.shortDw)) {
+        missingLines.push(`${shortDwField} = ${formatCommandForExport(state.shortDw)}${lineEndingSuffix}`);
+      }
+      if (!existingFields.has(shortUpField) && hasCommandContent(state.shortUp)) {
+        missingLines.push(`${shortUpField} = ${formatCommandForExport(state.shortUp)}${lineEndingSuffix}`);
+      }
+      if (!existingFields.has(longDwField) && hasCommandContent(state.longDw)) {
+        missingLines.push(`${longDwField} = ${formatCommandForExport(state.longDw)}${lineEndingSuffix}`);
+      }
+      if (!existingFields.has(longUpField) && hasCommandContent(state.longUp)) {
+        missingLines.push(`${longUpField} = ${formatCommandForExport(state.longUp)}${lineEndingSuffix}`);
+      }
+    }
+
+    if (missingLines.length > 0) {
+      insertions.push({ index: sectionRange.insertIndex, lines: missingLines });
+    }
+  }
+
+  insertions
+    .sort((a, b) => b.index - a.index)
+    .forEach((insertion) => {
+      lines.splice(insertion.index, 0, ...insertion.lines);
+    });
+}
+
+function findSectionInsertIndex(originalLines: string[], sectionName: string): { insertIndex: number } | null {
+  let headerIndex = -1;
+
+  for (let i = 0; i < originalLines.length; i++) {
+    if (originalLines[i].trim() === `[${sectionName}]`) {
+      headerIndex = i;
+      break;
+    }
+  }
+
+  if (headerIndex < 0) {
+    return null;
+  }
+
+  let nextHeaderIndex = originalLines.length;
+  for (let i = headerIndex + 1; i < originalLines.length; i++) {
+    if (/^\[\w+\]\s*$/.test(originalLines[i].trim())) {
+      nextHeaderIndex = i;
+      break;
+    }
+  }
+
+  let insertIndex = nextHeaderIndex;
+  while (insertIndex > headerIndex + 1 && originalLines[insertIndex - 1].trim() === '') {
+    insertIndex -= 1;
+  }
+
+  // Preserve comment separators for the next key block. If the lines before the next
+  // section are only comments and blanks, insert new fields before that separator block.
+  let separatorStart = insertIndex;
+  while (separatorStart > headerIndex + 1 && isBlankOrCommentLine(originalLines[separatorStart - 1])) {
+    separatorStart -= 1;
+  }
+
+  if (separatorStart < insertIndex) {
+    insertIndex = separatorStart;
+  }
+
+  return { insertIndex };
+}
+
+function hasCommandContent(value: string): boolean {
+  return Boolean((value || '').trim());
+}
+
+function isBlankOrCommentLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed === '' || trimmed.startsWith('#') || trimmed.startsWith(';') || trimmed.startsWith('//');
 }
 
 function replaceValue(line: string, field: string, newValue: string): string {
